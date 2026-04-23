@@ -1,0 +1,117 @@
+<mujoco model="motor_shaft">
+
+  <!--
+    This is the root tag and the opening tag of the entire file. We can name it anything, and it will appear in the viewer title bar. It has no effect on the physics.
+  -->
+
+  <compiler meshdir="." />  <!-- This tells MuJoCo where to look for mesh/stl files. The dot (.) means "the same folder as this XML file". If we move to a different subfolder (meshes), we'd write meshdir="meshes" instead-->
+
+  <option gravity="0 0 -9.81" timestep="0.002"/> <!-- This sets the gravity and simulation timestep. 0.002 seconds = 2 milliseconds per step, meaning the simulation runs at 500 Hz -->
+
+  <asset> <!-- This section defines the assets (meshes, textures, etc.) used in the simulation -->
+    <mesh name="motor_mesh" file="motor.stl" scale="0.001 0.001 0.001"/> <!-- MuJoCo works in meters-->
+    <mesh name="shaft_mesh" file="shaft.stl"  scale="0.001 0.001 0.001"/>
+  </asset>
+
+  <default> <!-- This section defines default values for various elements. We will use them in <geom> and <joint> tags -->
+    <geom condim="3" friction="0.8 0.1 0.1" contype="1" conaffinity="1"/> <!-- contact dmensionality. value 3 means full 3D friction. 3 friction co-efficients: sliding friction (0.8), torsional friction (0.1), and rolling friction (0.1) -->
+    <!-- contype and conaffinity define which objects can collide with each other. Two objects only collide if contype of one matches conaffinity of the other. Here the default is 1 for both. We will later
+    see that the motor and shaft geoms individually override these to 0, which prevents them from colliding with each other (so the sahft can spin freely through the motor body without jamming)-->
+    <joint damping="0.01" armature="0.01"/> <!--Damping is resistance to motion — like friction inside the joint bearing. 0.01 is very low, so the shaft can spin easily.
+    armature simulates the rotational inertia of the motor's rotor (the spinning part inside). Without it, the joint has no inertia and can behave in a numerically unstable way. A small value like 0.01 makes rotation smooth and realistic-->
+  </default>
+
+  <worldbody> <!-- This is the scene. Everything you want to physically exist in the simulation — objects, lights, the floor — lives inside here. The worldbody itself is the fixed, immovable world frame. Any <body> placed directly inside worldbody with no joint is welded to the world-->
+
+    <geom name="floor" type="plane" size="3 3 0.1" rgba="0.75 0.75 0.75 1"/>
+
+    <light name="top_light"  pos="0 0 3"   dir="0 0 -1"   diffuse="0.8 0.8 0.8" specular="0.3 0.3 0.3" directional="true"/>
+    <light name="side_light" pos="2 2 2"   dir="-1 -1 -1" diffuse="0.5 0.5 0.5" directional="true"/>
+
+    <!--
+      MOTOR BODY
+      Welded to world (no joint). Raised so bottom of motor (Z=-19.5mm)
+      clears the ground plane. pos Z = 0.0195m = 19.5mm * 0.001
+      This body has no joint, which means it is rigidly welded to the world. It will never move no matter what forces act on it
+    -->
+    <body name="motor" pos="0 0 0.0195">
+
+      <geom name="motor_geom"
+            type="mesh"
+            mesh="motor_mesh"
+            rgba="0.35 0.45 0.65 1"
+            mass="0.5" 
+            contype="0"
+            conaffinity="0"/>
+      <!--  Setting both contype and conaffinity to 0 means this geom collides with nothing. 
+      This is intentional — we don't want the motor and shaft meshes to physically collide with each other, because their surfaces overlap at the mounting point. 
+      Without this, the shaft would jam and not spin.
+      The motor body weighs 1 kilogram. MuJoCo uses this to calculate how forces affect the body
+      -->
+
+      <!--
+        SHAFT BODY — child of motor
+        pos Z = 0.0065m = 6.5mm * 0.001
+        This lifts the shaft so its Z=0 base sits exactly on the motor's Z=6.5mm top surface.
+        The joint rotates this body relative to its parent (motor). That is why it now spins.
+      -->
+      <body name="shaft" pos="0 0 0.0065">
+
+        <joint name="shaft_joint"
+               type="hinge"  
+               axis="0 0 1"
+               pos="0 0 0"
+               limited="false"
+               damping="0.01"
+               armature="0.01"/>
+        <!-- A hinge joint allows exactly one rotational degree of freedom, like a door hinge or a motor shaft. The shaft can spin but cannot slide or tilt
+        limited="false" — The shaft can rotate without any angle limit. 
+        armature="0.01" — Rotor inertia, same as explained in defaults
+        -->
+
+        <geom name="shaft_geom"
+              type="mesh"
+              mesh="shaft_mesh"
+              rgba="0.85 0.55 0.15 1"
+              mass="0.05"
+              contype="0"
+              conaffinity="0"/>
+
+      </body>
+
+    </body>
+
+  </worldbody>
+
+  <!--
+  The actuator section defines what can be controlled. Without this, there is no way to drive the joint — it would just be a free-spinning passive hinge
+  -->
+  <actuator>
+    <motor name="shaft_motor"
+           joint="shaft_joint"
+           gear="0.5"
+           ctrllimited="true"
+           ctrlrange="-3 3"/>
+  </actuator>
+
+  <!-- This is the gear ratio you set to match your real Dynamixel. 
+  The way it works: the slider in the viewer produces a control signal (a number), and that number gets multiplied by gear to produce the actual torque in Newton-metres applied to the joint. 
+  So if the slider is at 1.0, the torque applied is 1.0 × 0.5 = 0.5 Nm. For a Dynamixel this represents the gearbox amplification between the motor and the output shaft
+  ctrllimited="true" — Enables the control range limits below. Without this, ctrlrange is ignored.
+  ctrlrange="-3 3" — The slider in the viewer can go from −3 to +3. 
+  Positive values spin one direction, negative the other. 
+  Combined with gear="0.5", the maximum torque is 3 × 0.5 = 1.5 Nm.
+  We can reduce ctrlrange to "-1 1" if you want finer slider control.-->
+
+  <!-- Sensors record data from the simulation. They have no effect on physics — they are read-only.-->
+
+  <!-- <jointpos> — Measures the current angle of the joint in radians. So if the shaft has rotated 90 degrees, this reads 1.5708 (π/2 radians). This is our encoder equivalent 
+  In MuJoCo, this sensor does the same thing.
+  <jointvel> — Measures the current angular velocity in radians per second. If the shaft is spinning at 10 rad/s, we read 10 here.-->
+
+  <sensor>
+    <jointpos name="shaft_angle"    joint="shaft_joint"/>
+    <jointvel name="shaft_velocity" joint="shaft_joint"/>
+  </sensor>
+
+</mujoco>
